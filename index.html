@@ -279,7 +279,14 @@ function fmtSize(n) {
 }
 function fileUrl(f) {
   if (f.url) return f.url;
-  return `${SUPABASE_URL}/storage/v1/object/public/tasks/${f.path}?download=${encodeURIComponent(f.name)}`;
+  // Без ?download=... — иначе браузер сразу скачивает файл вместо открытия
+  const direct = `${SUPABASE_URL}/storage/v1/object/public/tasks/${f.path}`;
+  // Word / Excel / PowerPoint браузер сам показать не умеет — открываем через онлайн-просмотр
+  const ext = ((f.name || f.path || '').split('.').pop() || '').toLowerCase();
+  if (['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'].includes(ext)) {
+    return 'https://view.officeapps.live.com/op/view.aspx?src=' + encodeURIComponent(direct);
+  }
+  return direct;
 }
 function haptic(kind) {
   try { tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred(kind || 'success'); } catch (e) {}

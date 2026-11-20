@@ -281,10 +281,10 @@ function fileUrl(f) {
   if (f.url) return f.url;
   // Без ?download=... — иначе браузер сразу скачивает файл вместо открытия
   const direct = `${SUPABASE_URL}/storage/v1/object/public/tasks/${f.path}`;
-  // Word / Excel / PowerPoint браузер сам показать не умеет — открываем через онлайн-просмотр
+  // Word / Excel / PowerPoint браузер сам показать не умеет — открываем через Google Docs Viewer
   const ext = ((f.name || f.path || '').split('.').pop() || '').toLowerCase();
   if (['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'].includes(ext)) {
-    return 'https://view.officeapps.live.com/op/view.aspx?src=' + encodeURIComponent(direct);
+    return 'https://docs.google.com/viewer?url=' + encodeURIComponent(direct);
   }
   return direct;
 }

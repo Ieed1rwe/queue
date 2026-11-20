@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Очередь на семинары</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #ffffff);
+    --bg2: var(--tg-theme-secondary-bg-color, #f1f3f5);
+    --text: var(--tg-theme-text-color, #111111);
+    --hint: var(--tg-theme-hint-color, #7d8590);
+    --accent: var(--tg-theme-button-color, #2481cc);
+    --accent-text: var(--tg-theme-button-text-color, #ffffff);
+    --danger: var(--tg-theme-destructive-text-color, #d93025);
+    --line: color-mix(in srgb, var(--hint) 25%, transparent);
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg2); color: var(--text);
+    font: 16px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  #app { max-width: 560px; margin: 0 auto; padding: 14px 14px calc(28px + env(safe-area-inset-bottom)); }
+  h1 { font-size: 20px; margin: 4px 2px 2px; }
+  .sub { color: var(--hint); font-size: 13px; margin: 0 2px 12px; }
+  [hidden] { display: none !important; }
+
+  .card { background: var(--bg); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 12px; }
+  .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+  .card-head b { font-size: 17px; }
+  .count { color: var(--hint); font-size: 13px; white-space: nowrap; }
+
+  .tabs { display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 10px; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { flex: 0 0 auto; border: 0; border-radius: 999px; padding: 8px 14px; font: inherit; font-size: 14px;
+    background: var(--bg); color: var(--text); cursor: pointer; }
+  .tab.on { background: var(--accent); color: var(--accent-text); }
+  .tab small { opacity: .75; margin-left: 4px; }
+
+  ol { list-style: none; margin: 0; padding: 0; }
+  li.row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); }
+  li.row:first-child { border-top: 0; }
+  .num { flex: 0 0 28px; height: 28px; border-radius: 50%; background: var(--bg2); color: var(--hint);
+    display: grid; place-items: center; font-size: 13px; font-weight: 600; }
+  li.row.first .num { background: var(--accent); color: var(--accent-text); }
+  .nm { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .tag { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--bg2); color: var(--hint); margin-left: 6px; vertical-align: 1px; }
+  .tag.me { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+  li.row.mine .nm { font-weight: 600; }
+  .empty { color: var(--hint); padding: 14px 0 6px; text-align: center; }
+
+  button { font: inherit; }
+  .btn { display: block; width: 100%; border: 0; border-radius: var(--radius); padding: 14px; font-size: 16px;
+    font-weight: 600; background: var(--accent); color: var(--accent-text); cursor: pointer; margin-bottom: 12px; }
+  .btn.leave { background: var(--bg); color: var(--danger); }
+  .btn.ghost { background: var(--bg2); color: var(--text); font-weight: 500; margin: 0; padding: 11px; font-size: 15px; }
+  .btn.danger { color: var(--danger); }
+  .mini { border: 0; background: var(--bg2); color: var(--text); width: 32px; height: 32px; border-radius: 9px;
+    font-size: 14px; cursor: pointer; flex: 0 0 auto; }
+  .mini.x { color: var(--danger); }
+  .mini:disabled { opacity: .3; }
+
+  details.card summary { cursor: pointer; font-weight: 600; list-style: none; display: flex; justify-content: space-between; }
+  details.card summary::-webkit-details-marker { display: none; }
+  details.card summary::after { content: "▾"; color: var(--hint); }
+  details[open].card summary::after { content: "▴"; }
+  .admin-grid { display: grid; gap: 8px; margin-top: 12px; }
+  .subj { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); }
+  .subj span { flex: 1; overflow-wrap: anywhere; }
+  h3 { font-size: 13px; color: var(--hint); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; margin: 16px 0 4px; }
+
+  input[type=text] { width: 100%; font: inherit; padding: 12px; border-radius: 12px; border: 1px solid var(--line);
+    background: var(--bg2); color: var(--text); outline: none; }
+  input[type=text]:focus { border-color: var(--accent); }
+  .center { text-align: center; padding: 24px 8px; }
+  .center p { color: var(--hint); }
+  .id { font-variant-numeric: tabular-nums; background: var(--bg2); border-radius: 8px; padding: 2px 8px; }
+  .foot { color: var(--hint); font-size: 12px; text-align: center; margin-top: 6px; }
+
+  #net { background: #f5a623; color: #000; text-align: center; font-size: 13px; padding: 6px; border-radius: 10px; margin-bottom: 10px; }
+  #toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+    background: rgba(30,30,30,.92); color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 14px;
+    max-width: 88%; text-align: center; opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 20; }
+  #toast.on { opacity: 1; }
+  #modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: grid; place-items: center; padding: 18px; z-index: 30; }
+  #modal .box { background: var(--bg); border-radius: 18px; padding: 18px; width: 100%; max-width: 380px; }
+  #modal h2 { font-size: 17px; margin: 0 0 6px; }
+  #modal p { margin: 0 0 12px; color: var(--hint); font-size: 14px; }
+  #modal .btns { display: flex; gap: 8px; margin-top: 14px; }
+  #modal .btns .btn { margin: 0; padding: 12px; }
+  body.busy button { pointer-events: none; opacity: .65; }
+</style>
+</head>
+<body>
+<div id="app">
+  <h1>Очередь на семинары</h1>
+  <p class="sub" id="who">&nbsp;</p>
+  <div id="net" hidden>Нет связи, пробую снова…</div>
+
+  <!-- Сообщения / ошибки -->
+  <section id="screen-msg" class="card center" hidden>
+    <h2 id="msg-title" style="margin:0 0 6px"></h2>
+    <p id="msg-text"></p>
+  </section>
+
+  <!-- Вход по коду группы -->
+  <section id="screen-join" class="card" hidden>
+    <h2 style="margin:0 0 6px;font-size:18px">Вход в группу</h2>
+    <p class="sub" style="margin-bottom:12px">Введите код группы, который дал староста. Это нужно один раз.</p>
+    <input id="code" type="text" placeholder="Код группы" autocomplete="off" autocapitalize="off">
+    <button id="btn-join" class="btn" style="margin-top:12px">Войти</button>
+    <p class="foot">Ваш Telegram ID: <span class="id" id="join-id"></span></p>
+  </section>
+
+  <!-- Основной экран -->
+  <div id="screen-main" hidden>
+    <div id="tabs" class="tabs"></div>
+
+    <section class="card">
+      <div class="card-head"><b id="subj-title"></b><span class="count" id="count"></span></div>
+      <ol id="list"></ol>
+      <div id="empty" class="empty" hidden>Пока никого нет. Займите первое место!</div>
+    </section>
+
+    <button id="btn-main" class="btn"></button>
+
+    <details id="admin" class="card" hidden>
+      <summary>Управление (староста)</summary>
+      <div class="admin-grid">
+        <button id="a-next" class="btn ghost">✓ Первый ответил — убрать из очереди</button>
+        <button id="a-add" class="btn ghost">＋ Добавить человека вручную</button>
+        <button id="a-clear" class="btn ghost danger">Очистить очередь предмета</button>
+      </div>
+      <h3>Предметы</h3>
+      <div id="subj-list"></div>
+      <button id="a-subj-add" class="btn ghost" style="margin-top:8px">＋ Добавить предмет</button>
+    </details>
+
+    <p class="foot">Ваш Telegram ID: <span class="id" id="my-id"></span></p>
+  </div>
+</div>
+
+<div id="modal" hidden>
+  <div class="box">
+    <h2 id="m-title"></h2>
+    <p id="m-text" hidden></p>
+    <input id="m-input" type="text" maxlength="80" autocomplete="off" hidden>
+    <div class="btns">
+      <button id="m-cancel" class="btn ghost">Отмена</button>
+      <button id="m-ok" class="btn">ОК</button>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+(() => {
+'use strict';
+
+/* ==================== НАСТРОЙКИ (вставьте свои значения) ==================== */
+const SUPABASE_URL = 'https://bsfbkvvvqqlthcvxlytf.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_zjScZCOtkovsmsUSlFeU4A_KZQ1nH_I';   // публичный ключ (anon / publishable), НЕ secret / service_role!
+/* =========================================================================== */
+
+const tg = window.Telegram && window.Telegram.WebApp;
+const INIT = tg ? (tg.initData || '') : '';
+const POLL_MS = 5000;
+
+let state = null;      // последнее состояние с сервера
+let sig = '';          // подпись состояния, чтобы не перерисовывать зря
+let current = null;    // id выбранного предмета
+let busy = false;
+
+try { current = Number(sessionStorage.getItem('subj')) || null; } catch (e) {}
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
+
+/* ---------- Сеть ---------- */
+async function rpc(name, args) {
+  const headers = { 'Content-Type': 'application/json', apikey: SUPABASE_KEY };
+  if (SUPABASE_KEY.startsWith('eyJ')) headers.Authorization = 'Bearer ' + SUPABASE_KEY;
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${name}`, {
+    method: 'POST', headers, body: JSON.stringify({ init_data: INIT, ...(args || {}) })
+  });
+  const text = await r.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch (e) {}
+  if (!r.ok) {
+    const err = new Error((data && (data.message || data.hint)) || ('HTTP ' + r.status));
+    err.http = r.status;
+    throw err;
+  }
+  return data;
+}
+
+const ERR_TEXT = {
+  not_admin: 'Это действие доступно только старосте.',
+  bad_code: 'Неверный код группы.',
+  not_member: 'Сначала войдите по коду группы.',
+  empty_name: 'Название не может быть пустым.'
+};
+const FATAL = ['bad_auth', 'expired'];
+
+function handleErr(e, silent) {
+  const m = e && e.message || '';
+  if (FATAL.includes(m)) {
+    showMsg('Не удалось войти', 'Закройте приложение и откройте его заново через бота в Telegram.');
+    return;
+  }
+  if (e instanceof TypeError || /Failed to fetch|NetworkError|Load failed/i.test(m)) {
+    $('net').hidden = false;
+    return;
+  }
+  if (m === 'not_member') { sig = ''; refresh(true); return; }
+  if (/duplicate key|unique/i.test(m)) { toast('Такой предмет уже есть.'); return; }
+  if (!silent) toast(ERR_TEXT[m] || 'Ошибка: ' + m);
+}
+
+/* ---------- Мелкие помощники интерфейса ---------- */
+let toastTimer;
+function toast(t) {
+  const el = $('toast');
+  el.textContent = t; el.classList.add('on');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('on'), 2600);
+}
+function haptic(kind) {
+  try { tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred(kind || 'success'); } catch (e) {}
+}
+function show(which) {
+  ['screen-msg', 'screen-join', 'screen-main'].forEach(id => { $(id).hidden = id !== which; });
+}
+function showMsg(title, text) {
+  $('msg-title').textContent = title;
+  $('msg-text').textContent = text;
+  show('screen-msg');
+}
+
+/* Диалог: подтверждение или ввод текста. Возвращает true/строку или null. */
+function dialog({ title, text, input, initial, okText, danger }) {
+  return new Promise(resolve => {
+    const m = $('modal'), inp = $('m-input'), ok = $('m-ok');
+    $('m-title').textContent = title;
+    $('m-text').textContent = text || '';
+    $('m-text').hidden = !text;
+    inp.hidden = !input;
+    inp.value = initial || '';
+    ok.textContent = okText || 'ОК';
+    ok.style.background = danger ? 'var(--danger)' : '';
+    m.hidden = false;
+    if (input) setTimeout(() => inp.focus(), 50);
+    const done = v => {
+      m.hidden = true;
+      ok.onclick = $('m-cancel').onclick = inp.onkeydown = null;
+      resolve(v);
+    };
+    ok.onclick = () => done(input ? (inp.value.trim() || null) : true);
+    $('m-cancel').onclick = () => done(null);
+    inp.onkeydown = e => {
+      if (e.key === 'Enter') ok.onclick();
+      if (e.key === 'Escape') done(null);
+    };
+  });
+}
+
+/* ---------- Отрисовка ---------- */
+function curSubject() {
+  const list = state.subjects || [];
+  let s = list.find(x => x.id === current);
+  if (!s && list.length) { s = list[0]; current = s.id; }
+  return s || null;
+}
+
+function render() {
+  if (!state) return;
+  $('net').hidden = true;
+  $('who').textContent = state.name ? 'Вы: ' + state.name + (state.is_admin ? ' · староста' : '') : '';
+  $('join-id').textContent = state.tg_id;
+  $('my-id').textContent = state.tg_id;
+
+  if (!state.is_member) { show('screen-join'); return; }
+  show('screen-main');
+  $('admin').hidden = !state.is_admin;
+
+  const subjects = state.subjects || [];
+  const s = curSubject();
+
+  // вкладки
+  $('tabs').innerHTML = subjects.map(x =>
+    `<button class="tab${s && x.id === s.id ? ' on' : ''}" data-id="${x.id}">${esc(x.name)}<small>${x.entries.length}</small></button>`
+  ).join('');
+
+  if (!s) {
+    $('subj-title').textContent = 'Предметов пока нет';
+    $('count').textContent = '';
+    $('list').innerHTML = '';
+    $('empty').hidden = true;
+    $('btn-main').hidden = true;
+    $('a-next').hidden = $('a-add').hidden = $('a-clear').hidden = true;
+  } else {
+    const entries = s.entries;
+    const mine = entries.findIndex(e => e.tg_id === state.tg_id);
+    const adm = state.is_admin;
+    $('subj-title').textContent = s.name;
+    $('count').textContent = 'В очереди: ' + entries.length;
+    $('empty').hidden = entries.length > 0;
+    $('list').innerHTML = entries.map((e, i) => {
+      const me = e.tg_id === state.tg_id;
+      return `<li class="row${i === 0 ? ' first' : ''}${me ? ' mine' : ''}">
+        <span class="num">${i + 1}</span>
+        <span class="nm">${esc(e.name)}${me ? '<span class="tag me">вы</span>' : ''}${e.tg_id == null ? '<span class="tag">вручную</span>' : ''}</span>
+        ${adm ? `<button class="mini" data-act="up" data-id="${e.id}" ${i === 0 ? 'disabled' : ''} title="Выше">▲</button>
+                 <button class="mini" data-act="down" data-id="${e.id}" ${i === entries.length - 1 ? 'disabled' : ''} title="Ниже">▼</button>
+                 <button class="mini x" data-act="del" data-id="${e.id}" title="Убрать">✕</button>` : ''}
+      </li>`;
+    }).join('');
+
+    const b = $('btn-main');
+    b.hidden = false;
+    if (mine >= 0) { b.textContent = `Выйти из очереди (вы №${mine + 1})`; b.className = 'btn leave'; }
+    else { b.textContent = 'Записаться в очередь'; b.className = 'btn'; }
+
+    $('a-next').hidden = $('a-add').hidden = $('a-clear').hidden = false;
+    $('a-next').disabled = entries.length === 0;
+    $('a-clear').disabled = entries.length === 0;
+  }
+
+  // управление предметами
+  $('subj-list').innerHTML = subjects.map(x =>
+    `<div class="subj"><span>${esc(x.name)}</span>
+       <button class="mini" data-sact="rename" data-id="${x.id}" title="Переименовать">✎</button>
+       <button class="mini x" data-sact="delete" data-id="${x.id}" title="Удалить">🗑</button></div>`
+  ).join('');
+}
+
+/* ---------- Данные ---------- */
+async function refresh(silent) {
+  try {
+    const s = await rpc('app_state');
+    $('net').hidden = true;
+    const ns = JSON.stringify(s);
+    if (ns === sig) return;
+    sig = ns; state = s; render();
+  } catch (e) { handleErr(e, silent); }
+}
+
+async function act(name, args, okMsg) {
+  if (busy) return false;
+  busy = true; document.body.classList.add('busy');
+  try {
+    await rpc(name, args);
+    haptic('success');
+    await refresh();
+    if (okMsg) toast(okMsg);
+    return true;
+  } catch (e) { haptic('error'); handleErr(e); return false; }
+  finally { busy = false; document.body.classList.remove('busy'); }
+}
+
+/* ---------- События ---------- */
+$('tabs').addEventListener('click', e => {
+  const t = e.target.closest('.tab'); if (!t) return;
+  current = Number(t.dataset.id);
+  try { sessionStorage.setItem('subj', current); } catch (err) {}
+  render();
+});
+
+$('btn-main').addEventListener('click', () => {
+  const s = curSubject(); if (!s) return;
+  const inQ = s.entries.some(e => e.tg_id === state.tg_id);
+  act(inQ ? 'app_leave' : 'app_enqueue', { p_subject_id: s.id },
+      inQ ? 'Вы вышли из очереди' : 'Вы в очереди');
+});
+
+$('list').addEventListener('click', async e => {
+  const b = e.target.closest('button[data-act]'); if (!b) return;
+  const id = Number(b.dataset.id);
+  if (b.dataset.act === 'up') act('admin_move', { p_entry_id: id, p_dir: -1 });
+  else if (b.dataset.act === 'down') act('admin_move', { p_entry_id: id, p_dir: 1 });
+  else if (b.dataset.act === 'del') {
+    const s = curSubject();
+    const en = s && s.entries.find(x => x.id === id);
+    const ok = await dialog({ title: 'Убрать из очереди?', text: en ? en.name : '', okText: 'Убрать', danger: true });
+    if (ok) act('admin_remove', { p_entry_id: id });
+  }
+});
+
+$('a-next').addEventListener('click', async () => {
+  const s = curSubject(); if (!s || !s.entries.length) return;
+  const ok = await dialog({ title: 'Убрать первого?', text: s.entries[0].name + ' — ответил(а).', okText: 'Убрать' });
+  if (ok) act('admin_next', { p_subject_id: s.id });
+});
+$('a-add').addEventListener('click', async () => {
+  const s = curSubject(); if (!s) return;
+  const name = await dialog({ title: 'Добавить человека', text: 'Имя, как оно будет в списке', input: true, okText: 'Добавить' });
+  if (name) act('admin_add_person', { p_subject_id: s.id, p_name: name });
+});
+$('a-clear').addEventListener('click', async () => {
+  const s = curSubject(); if (!s || !s.entries.length) return;
+  const ok = await dialog({ title: 'Очистить очередь?', text: s.name + ': будут удалены все записи.', okText: 'Очистить', danger: true });
+  if (ok) act('admin_clear', { p_subject_id: s.id }, 'Очередь очищена');
+});
+$('a-subj-add').addEventListener('click', async () => {
+  const name = await dialog({ title: 'Новый предмет', input: true, okText: 'Добавить' });
+  if (name) act('admin_subject_add', { p_name: name });
+});
+$('subj-list').addEventListener('click', async e => {
+  const b = e.target.closest('button[data-sact]'); if (!b) return;
+  const id = Number(b.dataset.id);
+  const subj = state.subjects.find(x => x.id === id); if (!subj) return;
+  if (b.dataset.sact === 'rename') {
+    const name = await dialog({ title: 'Переименовать предмет', input: true, initial: subj.name, okText: 'Сохранить' });
+    if (name && name !== subj.name) act('admin_subject_rename', { p_subject_id: id, p_name: name });
+  } else {
+    const ok = await dialog({ title: 'Удалить предмет?', text: `«${subj.name}» и вся его очередь будут удалены.`, okText: 'Удалить', danger: true });
+    if (ok) act('admin_subject_delete', { p_subject_id: id });
+  }
+});
+
+$('btn-join').addEventListener('click', () => {
+  const code = $('code').value.trim();
+  if (!code) { toast('Введите код группы'); return; }
+  act('app_join', { code });
+});
+$('code').addEventListener('keydown', e => { if (e.key === 'Enter') $('btn-join').click(); });
+
+/* ---------- Старт ---------- */
+if (SUPABASE_URL.includes('ВАШ') || SUPABASE_KEY.includes('ВАШ')) {
+  showMsg('Приложение не настроено', 'Откройте index.html и впишите SUPABASE_URL и SUPABASE_KEY в блоке «НАСТРОЙКИ».');
+} else if (!INIT) {
+  showMsg('Откройте через Telegram', 'Это мини-приложение работает только внутри Telegram: откройте его через бота.');
+} else {
+  refresh();
+  setInterval(() => { if (!document.hidden && !busy) refresh(true); }, POLL_MS);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(true); });
+}
+})();
+</script>
+</body>
+</html>

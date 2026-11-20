@@ -163,7 +163,8 @@
     <details id="admin" class="card" hidden>
       <summary>Управление (староста)</summary>
       <div class="admin-grid">
-        <button id="a-toggle" class="btn ghost"></button>
+        <button id="a-toggle1" class="btn ghost"></button>
+        <button id="a-toggle2" class="btn ghost"></button>
         <button id="a-next" class="btn ghost">✓ Первый ответил — убрать из очереди</button>
         <button id="a-add" class="btn ghost">＋ Добавить человека вручную</button>
         <button id="a-clear" class="btn ghost danger">Очистить очередь предмета</button>
@@ -391,7 +392,7 @@ function render() {
     $('empty').hidden = true;
     $('btn-main').hidden = true;
     $('files-card').hidden = true;
-    $('a-next').hidden = $('a-add').hidden = $('a-clear').hidden = $('a-toggle').hidden = true;
+    $('a-next').hidden = $('a-add').hidden = $('a-clear').hidden = $('a-toggle1').hidden = $('a-toggle2').hidden = true;
   } else {
     $('qtabs').innerHTML = [1, 2].map(q =>
       `<button class="tab${q === curQ ? ' on' : ''}" data-q="${q}">${qOpen(s, q) ? '' : '🔒 '}${QUEUE_NAMES[q]}<small>${slotsOf(qEntries(s, q)).length}</small></button>`
@@ -449,8 +450,10 @@ function render() {
     } else { b.textContent = 'Записаться в очередь'; b.className = 'btn'; }
     b.disabled = !mySlot && !isOpen;
 
-    $('a-next').hidden = $('a-add').hidden = $('a-clear').hidden = $('a-toggle').hidden = false;
-    $('a-toggle').textContent = (isOpen ? '🔒 Закрыть запись: ' : '🔓 Открыть запись: ') + QUEUE_NAMES[curQ];
+    $('a-next').hidden = $('a-add').hidden = $('a-clear').hidden = $('a-toggle1').hidden = $('a-toggle2').hidden = false;
+    [1, 2].forEach(q => {
+      $('a-toggle' + q).textContent = (qOpen(s, q) ? '🔒 Закрыть запись: ' : '🔓 Открыть запись: ') + QUEUE_NAMES[q];
+    });
     $('a-next').disabled = entries.length === 0;
     $('a-clear').disabled = entries.length === 0;
 
@@ -560,11 +563,12 @@ $('list').addEventListener('click', async e => {
   }
 });
 
-$('a-toggle').addEventListener('click', () => {
+[1, 2].forEach(q => $('a-toggle' + q).addEventListener('click', () => {
   const s = curSubject(); if (!s) return;
-  const open = s.is_open === false;
-  act('admin_subject_set_open', { p_subject_id: s.id, p_open: open, p_queue: curQ }, open ? 'Очередь открыта' : 'Очередь закрыта');
-});
+  const open = !qOpen(s, q);
+  act('admin_subject_set_open', { p_subject_id: s.id, p_open: open, p_queue: q },
+      (open ? 'Открыта запись: ' : 'Закрыта запись: ') + QUEUE_NAMES[q]);
+}));
 $('a-next').addEventListener('click', async () => {
   const s = curSubject(); if (!s || !qEntries(s).length) return;
   const first = slotsOf(qEntries(s))[0];

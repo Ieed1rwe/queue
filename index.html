@@ -483,6 +483,11 @@ async function refresh(silent) {
     $('net').hidden = true;
     const ns = JSON.stringify(s);
     if (ns === sig) return;
+    // база не обновлена до версии с двумя очередями — предупреждаем старосту
+    if (s.is_admin && s.subjects && s.subjects.length && !('is_open2' in s.subjects[0]) && !window.__warnedV6) {
+      window.__warnedV6 = true;
+      toast('База данных на старой версии: выполните update_v6.sql в Supabase целиком.', 8000);
+    }
     sig = ns; state = s; render();
   } catch (e) { handleErr(e, silent); }
 }

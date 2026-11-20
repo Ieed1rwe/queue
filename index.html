@@ -109,7 +109,7 @@
 <body>
 <div id="app">
   <h1>Очередь на семинары</h1>
-  <p class="sub" id="who">&nbsp;</p>
+  <p class="sub"><span id="who">&nbsp;</span> <button id="rename" class="tbtn" hidden>изменить имя</button></p>
   <div id="net" hidden>Нет связи, пробую снова…</div>
 
   <!-- Сообщения / ошибки -->
@@ -121,10 +121,19 @@
   <!-- Вход по коду группы -->
   <section id="screen-join" class="card" hidden>
     <h2 style="margin:0 0 6px;font-size:18px">Вход в группу</h2>
-    <p class="sub" style="margin-bottom:12px">Введите код группы, который дал староста. Это нужно один раз.</p>
+    <p class="sub" style="margin-bottom:12px">Введите своё имя (оно будет в списке) и код группы, который дал староста. Это нужно один раз.</p>
+    <input id="join-name" type="text" maxlength="60" placeholder="Ваше имя, например: Анна Петрова" autocomplete="off" style="margin-bottom:8px">
     <input id="code" type="text" placeholder="Код группы" autocomplete="off" autocapitalize="off">
     <button id="btn-join" class="btn" style="margin-top:12px">Войти</button>
     <p class="foot">Ваш Telegram ID: <span class="id" id="join-id"></span></p>
+  </section>
+
+  <!-- Ввод имени (для тех, кто вошёл раньше) -->
+  <section id="screen-name" class="card" hidden>
+    <h2 style="margin:0 0 6px;font-size:18px">Как вас называть?</h2>
+    <p class="sub" style="margin-bottom:12px">Это имя увидят в списке очереди. Позже его можно изменить.</p>
+    <input id="name-input" type="text" maxlength="60" placeholder="Ваше имя" autocomplete="off">
+    <button id="btn-name" class="btn" style="margin-top:12px">Сохранить</button>
   </section>
 
   <!-- Основной экран -->
@@ -226,7 +235,7 @@ const ERR_TEXT = {
   not_admin: 'Это действие доступно только старосте.',
   bad_code: 'Неверный код группы.',
   not_member: 'Сначала войдите по коду группы.',
-  empty_name: 'Название не может быть пустым.',
+  empty_name: 'Поле не может быть пустым.',
   forbidden: 'Менять тему можно только у своей записи.',
   bad_url: 'Ссылка должна начинаться с https://',
   upload_missing: 'Файл не загрузился. Попробуйте ещё раз.',
@@ -276,7 +285,7 @@ function haptic(kind) {
   try { tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred(kind || 'success'); } catch (e) {}
 }
 function show(which) {
-  ['screen-msg', 'screen-join', 'screen-main'].forEach(id => { $(id).hidden = id !== which; });
+  ['screen-msg', 'screen-join', 'screen-name', 'screen-main'].forEach(id => { $(id).hidden = id !== which; });
 }
 function showMsg(title, text) {
   $('msg-title').textContent = title;
@@ -336,7 +345,17 @@ function render() {
   $('join-id').textContent = state.tg_id;
   $('my-id').textContent = state.tg_id;
 
-  if (!state.is_member) { show('screen-join'); return; }
+  $('rename').hidden = !(state.is_member && state.has_name);
+  if (!state.is_member) {
+    show('screen-join');
+    if (!$('join-name').value) $('join-name').value = state.name || '';
+    return;
+  }
+  if (!state.has_name) {
+    show('screen-name');
+    if (!$('name-input').value) $('name-input').value = state.name || '';
+    return;
+  }
   show('screen-main');
   $('admin').hidden = !state.is_admin;
 
@@ -370,7 +389,7 @@ function render() {
 
     const memberHtml = e => {
       const me = e.tg_id === state.tg_id;
-      const canEdit = me || adm;
+      const canEdit = me;   // тему меняет только сам участник
       let topic = '';
       if (canEdit) {
         topic = `<div><button class="tbtn" data-act="topic" data-id="${e.id}">${
@@ -479,7 +498,7 @@ $('list').addEventListener('click', async e => {
     const s = curSubject();
     const en = s && s.entries.find(x => x.id === id); if (!en) return;
     const t = await dialog({
-      title: 'Тема', text: en.tg_id === state.tg_id ? 'Какую тему вы взяли?' : en.name,
+      title: 'Тема', text: 'Какую тему вы взяли?',
       input: true, initial: en.topic || '', okText: 'Сохранить'
     });
     if (t !== null && t !== (en.topic || '')) act('app_set_topic', { p_entry_id: id, p_topic: t });
@@ -617,9 +636,22 @@ $('file-input').addEventListener('change', async () => {
 });
 
 $('btn-join').addEventListener('click', () => {
+  const name = $('join-name').value.trim();
   const code = $('code').value.trim();
+  if (!name) { toast('Введите своё имя'); return; }
   if (!code) { toast('Введите код группы'); return; }
-  act('app_join', { code });
+  act('app_join', { code, p_name: name });
+});
+$('join-name').addEventListener('keydown', e => { if (e.key === 'Enter') $('code').focus(); });
+$('btn-name').addEventListener('click', () => {
+  const name = $('name-input').value.trim();
+  if (!name) { toast('Введите своё имя'); return; }
+  act('app_set_name', { p_name: name });
+});
+$('name-input').addEventListener('keydown', e => { if (e.key === 'Enter') $('btn-name').click(); });
+$('rename').addEventListener('click', async () => {
+  const name = await dialog({ title: 'Ваше имя', text: 'Оно изменится и в списках очередей.', input: true, initial: state.name || '', okText: 'Сохранить' });
+  if (name && name !== state.name) act('app_set_name', { p_name: name }, 'Имя изменено');
 });
 $('code').addEventListener('keydown', e => { if (e.key === 'Enter') $('btn-join').click(); });
 

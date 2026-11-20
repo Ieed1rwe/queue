@@ -46,7 +46,12 @@
   .nm { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   .tag { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--bg2); color: var(--hint); margin-left: 6px; vertical-align: 1px; }
   .tag.me { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
-  li.row.mine .nm { font-weight: 600; }
+  .mem.mine .nm { font-weight: 600; }
+  .slotbody { flex: 1; min-width: 0; }
+  .mem { display: flex; align-items: center; gap: 8px; }
+  .mem + .mem { border-top: 1px dashed var(--line); margin-top: 6px; padding-top: 6px; }
+  .mv { display: flex; gap: 6px; flex: 0 0 auto; }
+  .joinbtn { border: 0; background: none; padding: 6px 0 0; font: inherit; font-size: 13px; color: var(--accent); cursor: pointer; }
   .empty { color: var(--hint); padding: 14px 0 6px; text-align: center; }
 
   button { font: inherit; }
@@ -225,7 +230,13 @@ const ERR_TEXT = {
   forbidden: 'Менять тему можно только у своей записи.',
   bad_url: 'Ссылка должна начинаться с https://',
   upload_missing: 'Файл не загрузился. Попробуйте ещё раз.',
-  no_ticket: 'Время на загрузку истекло. Попробуйте ещё раз.'
+  no_ticket: 'Время на загрузку истекло. Попробуйте ещё раз.',
+  slot_full: 'В этом выступлении уже двое.',
+  own_slot: 'Это ваше собственное место.',
+  already_in_slot: 'Вы уже выступаете в этой паре.',
+  has_partner: 'У вас уже есть напарник. Сначала выйдите из очереди.',
+  no_entry: 'Эта запись уже исчезла. Список обновлён.',
+  not_lead: 'Присоединиться можно только к основному месту.'
 };
 const FATAL = ['bad_auth', 'expired'];
 
@@ -274,7 +285,7 @@ function showMsg(title, text) {
 }
 
 /* Диалог: подтверждение или ввод текста. Возвращает true/строку или null. */
-function dialog({ title, text, input, initial, okText, danger }) {
+function dialog({ title, text, input, initial, okText, danger, numeric }) {
   return new Promise(resolve => {
     const m = $('modal'), inp = $('m-input'), ok = $('m-ok');
     $('m-title').textContent = title;
@@ -282,6 +293,7 @@ function dialog({ title, text, input, initial, okText, danger }) {
     $('m-text').hidden = !text;
     inp.hidden = !input;
     inp.value = initial || '';
+    inp.inputMode = numeric ? 'numeric' : 'text';
     ok.textContent = okText || 'ОК';
     ok.style.background = danger ? 'var(--danger)' : '';
     m.hidden = false;
@@ -308,6 +320,15 @@ function curSubject() {
   return s || null;
 }
 
+const MAX_SLOT = 2;   // сколько человек может выступать вместе (должно совпадать с базой)
+
+// Места очереди: основной человек + (необязательно) напарник
+function slotsOf(entries) {
+  const by = {};
+  entries.forEach(e => { if (e.partner_of != null) (by[e.partner_of] = by[e.partner_of] || []).push(e); });
+  return entries.filter(e => e.partner_of == null).map(l => ({ lead: l, members: [l, ...(by[l.id] || [])] }));
+}
+
 function render() {
   if (!state) return;
   $('net').hidden = true;
@@ -324,7 +345,7 @@ function render() {
 
   // вкладки
   $('tabs').innerHTML = subjects.map(x =>
-    `<button class="tab${s && x.id === s.id ? ' on' : ''}" data-id="${x.id}">${esc(x.name)}<small>${x.entries.length}</small></button>`
+    `<button class="tab${s && x.id === s.id ? ' on' : ''}" data-id="${x.id}">${esc(x.name)}<small>${slotsOf(x.entries).length}</small></button>`
   ).join('');
 
   if (!s) {
@@ -337,12 +358,17 @@ function render() {
     $('a-next').hidden = $('a-add').hidden = $('a-clear').hidden = true;
   } else {
     const entries = s.entries;
-    const mine = entries.findIndex(e => e.tg_id === state.tg_id);
+    const slots = slotsOf(entries);
+    const myIdx = slots.findIndex(sl => sl.members.some(e => e.tg_id === state.tg_id));
+    const mySlot = myIdx >= 0 ? slots[myIdx] : null;
+    const iHavePartner = !!mySlot && mySlot.lead.tg_id === state.tg_id && mySlot.members.length > 1;
     const adm = state.is_admin;
     $('subj-title').textContent = s.name;
-    $('count').textContent = 'В очереди: ' + entries.length;
-    $('empty').hidden = entries.length > 0;
-    $('list').innerHTML = entries.map((e, i) => {
+    $('count').textContent = 'В очереди: ' + slots.length +
+      (entries.length !== slots.length ? ' (человек: ' + entries.length + ')' : '');
+    $('empty').hidden = slots.length > 0;
+
+    const memberHtml = e => {
       const me = e.tg_id === state.tg_id;
       const canEdit = me || adm;
       let topic = '';
@@ -352,19 +378,32 @@ function render() {
       } else if (e.topic) {
         topic = `<div class="topic">Тема: <b>${esc(e.topic)}</b></div>`;
       }
-      return `<li class="row${i === 0 ? ' first' : ''}${me ? ' mine' : ''}">
-        <span class="num">${i + 1}</span>
+      return `<div class="mem${me ? ' mine' : ''}">
         <span class="nm">${esc(e.name)}${me ? '<span class="tag me">вы</span>' : ''}${e.tg_id == null ? '<span class="tag">вручную</span>' : ''}${topic}</span>
-        ${adm ? `<button class="mini" data-act="up" data-id="${e.id}" ${i === 0 ? 'disabled' : ''} title="Выше">▲</button>
-                 <button class="mini" data-act="down" data-id="${e.id}" ${i === entries.length - 1 ? 'disabled' : ''} title="Ниже">▼</button>
-                 <button class="mini x" data-act="del" data-id="${e.id}" title="Убрать">✕</button>` : ''}
+        ${adm ? `<button class="mini x" data-act="del" data-id="${e.id}" title="Убрать">✕</button>` : ''}
+      </div>`;
+    };
+
+    $('list').innerHTML = slots.map((sl, i) => {
+      const canJoin = sl.members.length < MAX_SLOT
+        && !sl.members.some(e => e.tg_id === state.tg_id) && !iHavePartner;
+      return `<li class="row${i === 0 ? ' first' : ''}">
+        <span class="num">${i + 1}</span>
+        <div class="slotbody">
+          ${sl.members.map(memberHtml).join('')}
+          ${canJoin ? `<button class="joinbtn" data-act="join" data-id="${sl.lead.id}">＋ Выступить вместе</button>` : ''}
+        </div>
+        ${adm ? `<div class="mv"><button class="mini" data-act="up" data-id="${sl.lead.id}" ${i === 0 ? 'disabled' : ''} title="Выше">▲</button>
+                 <button class="mini" data-act="down" data-id="${sl.lead.id}" ${i === slots.length - 1 ? 'disabled' : ''} title="Ниже">▼</button></div>` : ''}
       </li>`;
     }).join('');
 
     const b = $('btn-main');
     b.hidden = false;
-    if (mine >= 0) { b.textContent = `Выйти из очереди (вы №${mine + 1})`; b.className = 'btn leave'; }
-    else { b.textContent = 'Записаться в очередь'; b.className = 'btn'; }
+    if (mySlot) {
+      b.textContent = `Выйти из очереди (вы №${myIdx + 1}${mySlot.members.length > 1 ? ', в паре' : ''})`;
+      b.className = 'btn leave';
+    } else { b.textContent = 'Записаться в очередь'; b.className = 'btn'; }
 
     $('a-next').hidden = $('a-add').hidden = $('a-clear').hidden = false;
     $('a-next').disabled = entries.length === 0;
@@ -446,6 +485,19 @@ $('list').addEventListener('click', async e => {
     if (t !== null && t !== (en.topic || '')) act('app_set_topic', { p_entry_id: id, p_topic: t });
     return;
   }
+  if (b.dataset.act === 'join') {
+    const s = curSubject();
+    const lead = s && s.entries.find(x => x.id === id); if (!lead) return;
+    const my = s.entries.find(x => x.tg_id === state.tg_id);
+    const t = await dialog({
+      title: 'Выступить вместе с ' + lead.name,
+      text: my ? 'Ваше нынешнее место освободится, вы встанете в пару.' : 'Вы будете выступать вдвоём. Тему можно изменить.',
+      input: true, initial: lead.topic || '', okText: 'Присоединиться'
+    });
+    if (t === null) return;
+    act('app_join_partner', { p_entry_id: id, p_topic: t }, 'Вы в паре');
+    return;
+  }
   if (b.dataset.act === 'up') act('admin_move', { p_entry_id: id, p_dir: -1 });
   else if (b.dataset.act === 'down') act('admin_move', { p_entry_id: id, p_dir: 1 });
   else if (b.dataset.act === 'del') {
@@ -458,13 +510,29 @@ $('list').addEventListener('click', async e => {
 
 $('a-next').addEventListener('click', async () => {
   const s = curSubject(); if (!s || !s.entries.length) return;
-  const ok = await dialog({ title: 'Убрать первого?', text: s.entries[0].name + ' — ответил(а).', okText: 'Убрать' });
+  const first = slotsOf(s.entries)[0];
+  const ok = await dialog({ title: 'Убрать первого?', text: first.members.map(m => m.name).join(' и ') + ' — ответил(а).', okText: 'Убрать' });
   if (ok) act('admin_next', { p_subject_id: s.id });
 });
 $('a-add').addEventListener('click', async () => {
   const s = curSubject(); if (!s) return;
   const name = await dialog({ title: 'Добавить человека', text: 'Имя, как оно будет в списке', input: true, okText: 'Добавить' });
-  if (name) act('admin_add_person', { p_subject_id: s.id, p_name: name });
+  if (!name) return;
+  const n = slotsOf(s.entries).length;
+  const args = { p_subject_id: s.id, p_name: name };
+  if (n > 0) {
+    const pos = await dialog({
+      title: 'На какое место?', text: `Номер от 1 до ${n + 1}. Остальные сдвинутся вниз. Пусто — в конец.`,
+      input: true, numeric: true, okText: 'Добавить'
+    });
+    if (pos === null) return;
+    if (pos !== '') {
+      const k = parseInt(pos, 10);
+      if (!(k >= 1)) { toast('Введите номер места, например 2'); return; }
+      if (k <= n) args.p_position = k;
+    }
+  }
+  act('admin_add_person', args);
 });
 $('a-clear').addEventListener('click', async () => {
   const s = curSubject(); if (!s || !s.entries.length) return;

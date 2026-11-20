@@ -88,6 +88,16 @@
   #modal p { margin: 0 0 12px; color: var(--hint); font-size: 14px; }
   #modal .btns { display: flex; gap: 8px; margin-top: 14px; }
   #modal .btns .btn { margin: 0; padding: 12px; }
+  .topic { margin-top: 2px; font-size: 13px; color: var(--hint); }
+  .topic b, .tbtn b { color: var(--text); font-weight: 500; }
+  .tbtn { border: 0; background: none; padding: 2px 0 0; font: inherit; font-size: 13px; color: var(--accent);
+    cursor: pointer; text-align: left; overflow-wrap: anywhere; }
+  .frow { display: flex; align-items: center; gap: 8px; padding: 9px 0; border-top: 1px solid var(--line); }
+  .frow:first-child { border-top: 0; }
+  .fbtn { flex: 1; min-width: 0; text-align: left; border: 0; background: none; padding: 0; font: inherit;
+    color: var(--accent); cursor: pointer; overflow-wrap: anywhere; }
+  .fbtn small { color: var(--hint); margin-left: 6px; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
   body.busy button { pointer-events: none; opacity: .65; }
 </style>
 </head>
@@ -124,6 +134,16 @@
 
     <button id="btn-main" class="btn"></button>
 
+    <section id="files-card" class="card" hidden>
+      <div class="card-head"><b>Материалы к заданию</b></div>
+      <div id="files"></div>
+      <div id="files-admin" class="row2" hidden>
+        <button id="f-upload" class="btn ghost">📎 Файл</button>
+        <button id="f-link" class="btn ghost">🔗 Ссылка</button>
+      </div>
+      <input id="file-input" type="file" hidden>
+    </section>
+
     <details id="admin" class="card" hidden>
       <summary>Управление (староста)</summary>
       <div class="admin-grid">
@@ -144,7 +164,7 @@
   <div class="box">
     <h2 id="m-title"></h2>
     <p id="m-text" hidden></p>
-    <input id="m-input" type="text" maxlength="80" autocomplete="off" hidden>
+    <input id="m-input" type="text" maxlength="150" autocomplete="off" hidden>
     <div class="btns">
       <button id="m-cancel" class="btn ghost">Отмена</button>
       <button id="m-ok" class="btn">ОК</button>
@@ -201,7 +221,11 @@ const ERR_TEXT = {
   not_admin: 'Это действие доступно только старосте.',
   bad_code: 'Неверный код группы.',
   not_member: 'Сначала войдите по коду группы.',
-  empty_name: 'Название не может быть пустым.'
+  empty_name: 'Название не может быть пустым.',
+  forbidden: 'Менять тему можно только у своей записи.',
+  bad_url: 'Ссылка должна начинаться с https://',
+  upload_missing: 'Файл не загрузился. Попробуйте ещё раз.',
+  no_ticket: 'Время на загрузку истекло. Попробуйте ещё раз.'
 };
 const FATAL = ['bad_auth', 'expired'];
 
@@ -222,11 +246,20 @@ function handleErr(e, silent) {
 
 /* ---------- Мелкие помощники интерфейса ---------- */
 let toastTimer;
-function toast(t) {
+function toast(t, ms) {
   const el = $('toast');
   el.textContent = t; el.classList.add('on');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('on'), 2600);
+  toastTimer = setTimeout(() => el.classList.remove('on'), ms || 2600);
+}
+function fmtSize(n) {
+  if (!n) return '';
+  if (n < 1024 * 1024) return Math.max(1, Math.round(n / 1024)) + ' КБ';
+  return (n / 1024 / 1024).toFixed(1).replace('.', ',') + ' МБ';
+}
+function fileUrl(f) {
+  if (f.url) return f.url;
+  return `${SUPABASE_URL}/storage/v1/object/public/tasks/${f.path}?download=${encodeURIComponent(f.name)}`;
 }
 function haptic(kind) {
   try { tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred(kind || 'success'); } catch (e) {}
@@ -258,7 +291,7 @@ function dialog({ title, text, input, initial, okText, danger }) {
       ok.onclick = $('m-cancel').onclick = inp.onkeydown = null;
       resolve(v);
     };
-    ok.onclick = () => done(input ? (inp.value.trim() || null) : true);
+    ok.onclick = () => done(input ? inp.value.trim() : true);   // '' = пусто, null = отмена
     $('m-cancel').onclick = () => done(null);
     inp.onkeydown = e => {
       if (e.key === 'Enter') ok.onclick();
@@ -300,6 +333,7 @@ function render() {
     $('list').innerHTML = '';
     $('empty').hidden = true;
     $('btn-main').hidden = true;
+    $('files-card').hidden = true;
     $('a-next').hidden = $('a-add').hidden = $('a-clear').hidden = true;
   } else {
     const entries = s.entries;
@@ -310,9 +344,17 @@ function render() {
     $('empty').hidden = entries.length > 0;
     $('list').innerHTML = entries.map((e, i) => {
       const me = e.tg_id === state.tg_id;
+      const canEdit = me || adm;
+      let topic = '';
+      if (canEdit) {
+        topic = `<div><button class="tbtn" data-act="topic" data-id="${e.id}">${
+          e.topic ? `Тема: <b>${esc(e.topic)}</b> ✎` : '＋ указать тему'}</button></div>`;
+      } else if (e.topic) {
+        topic = `<div class="topic">Тема: <b>${esc(e.topic)}</b></div>`;
+      }
       return `<li class="row${i === 0 ? ' first' : ''}${me ? ' mine' : ''}">
         <span class="num">${i + 1}</span>
-        <span class="nm">${esc(e.name)}${me ? '<span class="tag me">вы</span>' : ''}${e.tg_id == null ? '<span class="tag">вручную</span>' : ''}</span>
+        <span class="nm">${esc(e.name)}${me ? '<span class="tag me">вы</span>' : ''}${e.tg_id == null ? '<span class="tag">вручную</span>' : ''}${topic}</span>
         ${adm ? `<button class="mini" data-act="up" data-id="${e.id}" ${i === 0 ? 'disabled' : ''} title="Выше">▲</button>
                  <button class="mini" data-act="down" data-id="${e.id}" ${i === entries.length - 1 ? 'disabled' : ''} title="Ниже">▼</button>
                  <button class="mini x" data-act="del" data-id="${e.id}" title="Убрать">✕</button>` : ''}
@@ -327,6 +369,16 @@ function render() {
     $('a-next').hidden = $('a-add').hidden = $('a-clear').hidden = false;
     $('a-next').disabled = entries.length === 0;
     $('a-clear').disabled = entries.length === 0;
+
+    // материалы к заданию
+    const files = s.files || [];
+    $('files-card').hidden = !(files.length || adm);
+    $('files').innerHTML = files.length ? files.map(f =>
+      `<div class="frow"><button class="fbtn" data-fid="${f.id}">${f.path ? '📎' : '🔗'} ${esc(f.name)}${
+        f.size ? `<small>${fmtSize(f.size)}</small>` : ''}</button>${
+        adm ? `<button class="mini x" data-fdel="${f.id}" title="Убрать">✕</button>` : ''}</div>`
+    ).join('') : '<div class="empty" style="padding:4px 0 2px">Файлов пока нет</div>';
+    $('files-admin').hidden = !adm;
   }
 
   // управление предметами
@@ -369,16 +421,31 @@ $('tabs').addEventListener('click', e => {
   render();
 });
 
-$('btn-main').addEventListener('click', () => {
+$('btn-main').addEventListener('click', async () => {
   const s = curSubject(); if (!s) return;
   const inQ = s.entries.some(e => e.tg_id === state.tg_id);
-  act(inQ ? 'app_leave' : 'app_enqueue', { p_subject_id: s.id },
-      inQ ? 'Вы вышли из очереди' : 'Вы в очереди');
+  if (inQ) { act('app_leave', { p_subject_id: s.id }, 'Вы вышли из очереди'); return; }
+  const topic = await dialog({
+    title: 'Запись в очередь', text: 'Какую тему вы взяли? Можно пропустить и указать позже.',
+    input: true, okText: 'Записаться'
+  });
+  if (topic === null) return;
+  act('app_enqueue', { p_subject_id: s.id, p_topic: topic }, 'Вы в очереди');
 });
 
 $('list').addEventListener('click', async e => {
   const b = e.target.closest('button[data-act]'); if (!b) return;
   const id = Number(b.dataset.id);
+  if (b.dataset.act === 'topic') {
+    const s = curSubject();
+    const en = s && s.entries.find(x => x.id === id); if (!en) return;
+    const t = await dialog({
+      title: 'Тема', text: en.tg_id === state.tg_id ? 'Какую тему вы взяли?' : en.name,
+      input: true, initial: en.topic || '', okText: 'Сохранить'
+    });
+    if (t !== null && t !== (en.topic || '')) act('app_set_topic', { p_entry_id: id, p_topic: t });
+    return;
+  }
   if (b.dataset.act === 'up') act('admin_move', { p_entry_id: id, p_dir: -1 });
   else if (b.dataset.act === 'down') act('admin_move', { p_entry_id: id, p_dir: 1 });
   else if (b.dataset.act === 'del') {
@@ -419,6 +486,66 @@ $('subj-list').addEventListener('click', async e => {
     const ok = await dialog({ title: 'Удалить предмет?', text: `«${subj.name}» и вся его очередь будут удалены.`, okText: 'Удалить', danger: true });
     if (ok) act('admin_subject_delete', { p_subject_id: id });
   }
+});
+
+/* ---------- Материалы к заданию ---------- */
+const MAX_BYTES = 20 * 1024 * 1024;
+
+$('files').addEventListener('click', async e => {
+  const open = e.target.closest('button[data-fid]');
+  const del = e.target.closest('button[data-fdel]');
+  const s = curSubject(); if (!s) return;
+  if (open) {
+    const f = (s.files || []).find(x => x.id === Number(open.dataset.fid)); if (!f) return;
+    const url = fileUrl(f);
+    if (tg && tg.openLink) tg.openLink(url); else window.open(url, '_blank');
+  } else if (del) {
+    const f = (s.files || []).find(x => x.id === Number(del.dataset.fdel)); if (!f) return;
+    const ok = await dialog({ title: 'Убрать материал?', text: f.name, okText: 'Убрать', danger: true });
+    if (ok) act('admin_file_delete', { p_file_id: f.id });
+  }
+});
+
+$('f-link').addEventListener('click', async () => {
+  const s = curSubject(); if (!s) return;
+  const url = await dialog({ title: 'Ссылка на задание', text: 'Например, ссылка на Google Диск или документ.', input: true, initial: 'https://', okText: 'Далее' });
+  if (!url) return;
+  if (!/^https?:\/\/\S+$/i.test(url)) { toast('Ссылка должна начинаться с https://'); return; }
+  const name = await dialog({ title: 'Название', text: 'Как подписать ссылку в списке?', input: true, initial: 'Задание', okText: 'Добавить' });
+  if (name === null) return;
+  act('admin_file_add_link', { p_subject_id: s.id, p_name: name || 'Ссылка', p_url: url }, 'Ссылка добавлена');
+});
+
+$('f-upload').addEventListener('click', () => { $('file-input').click(); });
+$('file-input').addEventListener('change', async () => {
+  const input = $('file-input');
+  const file = input.files && input.files[0];
+  input.value = '';
+  const s = curSubject();
+  if (!file || !s || busy) return;
+  if (file.size > MAX_BYTES) { toast('Файл больше 20 МБ. Прикрепите ссылку.', 3500); return; }
+  busy = true; document.body.classList.add('busy');
+  toast('Загружаю файл…', 60000);
+  try {
+    const ext = (file.name.split('.').pop() || '').slice(0, 8);
+    const path = await rpc('admin_file_ticket', { p_subject_id: s.id, p_ext: ext });
+    const headers = { apikey: SUPABASE_KEY, 'Content-Type': file.type || 'application/octet-stream', 'x-upsert': 'false' };
+    if (SUPABASE_KEY.startsWith('eyJ')) headers.Authorization = 'Bearer ' + SUPABASE_KEY;
+    const r = await fetch(`${SUPABASE_URL}/storage/v1/object/tasks/${path}`, { method: 'POST', headers, body: file });
+    if (!r.ok) {
+      let msg = ''; try { const j = await r.json(); msg = j.message || j.error || ''; } catch (err) {}
+      const er = new Error('upload_failed'); er.detail = msg || ('HTTP ' + r.status); throw er;
+    }
+    await rpc('admin_file_register', { p_path: path, p_name: file.name, p_size: file.size });
+    haptic('success');
+    sig = '';
+    await refresh();
+    toast('Файл прикреплён');
+  } catch (e) {
+    haptic('error');
+    if (e.message === 'upload_failed') toast('Не удалось загрузить файл (' + e.detail + '). Прикрепите ссылку.', 5000);
+    else handleErr(e);
+  } finally { busy = false; document.body.classList.remove('busy'); }
 });
 
 $('btn-join').addEventListener('click', () => {

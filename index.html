@@ -165,6 +165,7 @@
       <div class="admin-grid">
         <button id="a-toggle1" class="btn ghost"></button>
         <button id="a-toggle2" class="btn ghost"></button>
+        <p id="a-diag" class="sub" style="margin:0;font-size:12px"></p>
         <button id="a-next" class="btn ghost">✓ Первый ответил — убрать из очереди</button>
         <button id="a-add" class="btn ghost">＋ Добавить человека вручную</button>
         <button id="a-clear" class="btn ghost danger">Очистить очередь предмета</button>
@@ -451,6 +452,9 @@ function render() {
     b.disabled = !mySlot && !isOpen;
 
     $('a-next').hidden = $('a-add').hidden = $('a-clear').hidden = $('a-toggle1').hidden = $('a-toggle2').hidden = false;
+    const fl = v => v === true ? 'открыта' : v === false ? 'закрыта' : 'НЕТ ДАННЫХ (база не обновлена)';
+    $('a-diag').textContent = 'Из базы: «Старые» — ' + fl(s.is_open) + ', «Новые» — ' + fl(s.is_open2) +
+      '; записей в «Новых»: ' + s.entries.filter(e => e.queue === 2).length;
     [1, 2].forEach(q => {
       $('a-toggle' + q).textContent = (qOpen(s, q) ? '🔒 Закрыть запись: ' : '🔓 Открыть запись: ') + QUEUE_NAMES[q];
     });
@@ -568,11 +572,15 @@ $('list').addEventListener('click', async e => {
   }
 });
 
-[1, 2].forEach(q => $('a-toggle' + q).addEventListener('click', () => {
+[1, 2].forEach(q => $('a-toggle' + q).addEventListener('click', async () => {
   const s = curSubject(); if (!s) return;
   const open = !qOpen(s, q);
-  act('admin_subject_set_open', { p_subject_id: s.id, p_open: open, p_queue: q },
-      (open ? 'Открыта запись: ' : 'Закрыта запись: ') + QUEUE_NAMES[q]);
+  const ok = await act('admin_subject_set_open', { p_subject_id: s.id, p_open: open, p_queue: q }, null);
+  if (!ok) return;
+  // сообщаем то, что реально записано в базе, а не то, что мы хотели
+  const s2 = curSubject();
+  if (s2 && qOpen(s2, q) === open) toast((open ? 'Открыта запись: ' : 'Закрыта запись: ') + QUEUE_NAMES[q]);
+  else toast('Не получилось: база не приняла изменение. Выполните update_v6.sql целиком.', 6000);
 }));
 $('a-next').addEventListener('click', async () => {
   const s = curSubject(); if (!s || !qEntries(s).length) return;

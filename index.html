@@ -57,6 +57,7 @@
   button { font: inherit; }
   .btn { display: block; width: 100%; border: 0; border-radius: var(--radius); padding: 14px; font-size: 16px;
     font-weight: 600; background: var(--accent); color: var(--accent-text); cursor: pointer; margin-bottom: 12px; }
+  .btn:disabled { opacity: .55; cursor: default; }
   .btn.leave { background: var(--bg); color: var(--danger); }
   .btn.ghost { background: var(--bg2); color: var(--text); font-weight: 500; margin: 0; padding: 11px; font-size: 15px; }
   .btn.danger { color: var(--danger); }
@@ -139,6 +140,7 @@
   <!-- Основной экран -->
   <div id="screen-main" hidden>
     <div id="tabs" class="tabs"></div>
+    <div id="qtabs" class="tabs"></div>
 
     <section class="card">
       <div class="card-head"><b id="subj-title"></b><span class="count" id="count"></span></div>
@@ -161,6 +163,7 @@
     <details id="admin" class="card" hidden>
       <summary>Управление (староста)</summary>
       <div class="admin-grid">
+        <button id="a-toggle" class="btn ghost"></button>
         <button id="a-next" class="btn ghost">✓ Первый ответил — убрать из очереди</button>
         <button id="a-add" class="btn ghost">＋ Добавить человека вручную</button>
         <button id="a-clear" class="btn ghost danger">Очистить очередь предмета</button>
@@ -203,9 +206,11 @@ const POLL_MS = 5000;
 let state = null;      // последнее состояние с сервера
 let sig = '';          // подпись состояния, чтобы не перерисовывать зря
 let current = null;    // id выбранного предмета
+let curQ = 1;          // выбранная очередь внутри предмета: 1 или 2
+const QUEUE_NAMES = { 1: 'Старые темы', 2: 'Новые темы' };
 let busy = false;
 
-try { current = Number(sessionStorage.getItem('subj')) || null; } catch (e) {}
+try { current = Number(sessionStorage.getItem('subj')) || null; curQ = Number(sessionStorage.getItem('q')) === 2 ? 2 : 1; } catch (e) {}
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c =>
@@ -245,7 +250,8 @@ const ERR_TEXT = {
   already_in_slot: 'Вы уже выступаете в этой паре.',
   has_partner: 'У вас уже есть напарник. Сначала выйдите из очереди.',
   no_entry: 'Эта запись уже исчезла. Список обновлён.',
-  not_lead: 'Присоединиться можно только к основному месту.'
+  not_lead: 'Присоединиться можно только к основному месту.',
+  queue_closed: 'Очередь закрыта. Староста откроет её позже.'
 };
 const FATAL = ['bad_auth', 'expired'];
 
@@ -336,6 +342,9 @@ function curSubject() {
   return s || null;
 }
 
+function qOpen(s, q) { return q === 1 ? s.is_open !== false : s.is_open2 === true; }
+function qEntries(s, q) { return s.entries.filter(e => (e.queue || 1) === (q || curQ)); }
+
 const MAX_SLOT = 2;   // сколько человек может выступать вместе (должно совпадать с базой)
 
 // Места очереди: основной человек + (необязательно) напарник
@@ -375,24 +384,30 @@ function render() {
   ).join('');
 
   if (!s) {
+    $('qtabs').innerHTML = '';
     $('subj-title').textContent = 'Предметов пока нет';
     $('count').textContent = '';
     $('list').innerHTML = '';
     $('empty').hidden = true;
     $('btn-main').hidden = true;
     $('files-card').hidden = true;
-    $('a-next').hidden = $('a-add').hidden = $('a-clear').hidden = true;
+    $('a-next').hidden = $('a-add').hidden = $('a-clear').hidden = $('a-toggle').hidden = true;
   } else {
-    const entries = s.entries;
+    $('qtabs').innerHTML = [1, 2].map(q =>
+      `<button class="tab${q === curQ ? ' on' : ''}" data-q="${q}">${qOpen(s, q) ? '' : '🔒 '}${QUEUE_NAMES[q]}<small>${slotsOf(qEntries(s, q)).length}</small></button>`
+    ).join('');
+    const entries = qEntries(s);
     const slots = slotsOf(entries);
     const myIdx = slots.findIndex(sl => sl.members.some(e => e.tg_id === state.tg_id));
     const mySlot = myIdx >= 0 ? slots[myIdx] : null;
     const iHavePartner = !!mySlot && mySlot.lead.tg_id === state.tg_id && mySlot.members.length > 1;
     const adm = state.is_admin;
-    $('subj-title').textContent = s.name;
-    $('count').textContent = 'В очереди: ' + slots.length +
+    $('subj-title').textContent = s.name + ' · ' + QUEUE_NAMES[curQ];
+    const isOpen = qOpen(s, curQ);
+    $('count').textContent = (isOpen ? '' : '🔒 Закрыта · ') + 'В очереди: ' + slots.length +
       (entries.length !== slots.length ? ' (человек: ' + entries.length + ')' : '');
     $('empty').hidden = slots.length > 0;
+    $('empty').textContent = isOpen ? 'Пока никого нет. Займите первое место!' : 'Очередь пока закрыта. Староста откроет её позже.';
 
     const memberHtml = e => {
       const me = e.tg_id === state.tg_id;
@@ -411,7 +426,7 @@ function render() {
     };
 
     $('list').innerHTML = slots.map((sl, i) => {
-      const canJoin = sl.members.length < MAX_SLOT
+      const canJoin = isOpen && sl.members.length < MAX_SLOT
         && !sl.members.some(e => e.tg_id === state.tg_id) && !iHavePartner;
       return `<li class="row${i === 0 ? ' first' : ''}">
         <span class="num">${i + 1}</span>
@@ -429,9 +444,13 @@ function render() {
     if (mySlot) {
       b.textContent = `Выйти из очереди (вы №${myIdx + 1}${mySlot.members.length > 1 ? ', в паре' : ''})`;
       b.className = 'btn leave';
+    } else if (!isOpen) {
+      b.textContent = '🔒 Очередь закрыта'; b.className = 'btn';
     } else { b.textContent = 'Записаться в очередь'; b.className = 'btn'; }
+    b.disabled = !mySlot && !isOpen;
 
-    $('a-next').hidden = $('a-add').hidden = $('a-clear').hidden = false;
+    $('a-next').hidden = $('a-add').hidden = $('a-clear').hidden = $('a-toggle').hidden = false;
+    $('a-toggle').textContent = (isOpen ? '🔒 Закрыть запись: ' : '🔓 Открыть запись: ') + QUEUE_NAMES[curQ];
     $('a-next').disabled = entries.length === 0;
     $('a-clear').disabled = entries.length === 0;
 
@@ -486,16 +505,23 @@ $('tabs').addEventListener('click', e => {
   render();
 });
 
+$('qtabs').addEventListener('click', e => {
+  const t = e.target.closest('.tab'); if (!t) return;
+  curQ = Number(t.dataset.q) === 2 ? 2 : 1;
+  try { sessionStorage.setItem('q', curQ); } catch (err) {}
+  render();
+});
+
 $('btn-main').addEventListener('click', async () => {
   const s = curSubject(); if (!s) return;
-  const inQ = s.entries.some(e => e.tg_id === state.tg_id);
-  if (inQ) { act('app_leave', { p_subject_id: s.id }, 'Вы вышли из очереди'); return; }
+  const inQ = qEntries(s).some(e => e.tg_id === state.tg_id);
+  if (inQ) { act('app_leave', { p_subject_id: s.id, p_queue: curQ }, 'Вы вышли из очереди'); return; }
   const topic = await dialog({
     title: 'Запись в очередь', text: 'Какую тему вы взяли? Можно пропустить и указать позже.',
     input: true, okText: 'Записаться'
   });
   if (topic === null) return;
-  act('app_enqueue', { p_subject_id: s.id, p_topic: topic }, 'Вы в очереди');
+  act('app_enqueue', { p_subject_id: s.id, p_topic: topic, p_queue: curQ }, 'Вы в очереди');
 });
 
 $('list').addEventListener('click', async e => {
@@ -514,7 +540,7 @@ $('list').addEventListener('click', async e => {
   if (b.dataset.act === 'join') {
     const s = curSubject();
     const lead = s && s.entries.find(x => x.id === id); if (!lead) return;
-    const my = s.entries.find(x => x.tg_id === state.tg_id);
+    const my = qEntries(s, lead.queue).find(x => x.tg_id === state.tg_id);
     const t = await dialog({
       title: 'Выступить вместе с ' + lead.name,
       text: my ? 'Ваше нынешнее место освободится, вы встанете в пару.' : 'Вы будете выступать вдвоём. Тему можно изменить.',
@@ -534,18 +560,23 @@ $('list').addEventListener('click', async e => {
   }
 });
 
+$('a-toggle').addEventListener('click', () => {
+  const s = curSubject(); if (!s) return;
+  const open = s.is_open === false;
+  act('admin_subject_set_open', { p_subject_id: s.id, p_open: open, p_queue: curQ }, open ? 'Очередь открыта' : 'Очередь закрыта');
+});
 $('a-next').addEventListener('click', async () => {
-  const s = curSubject(); if (!s || !s.entries.length) return;
-  const first = slotsOf(s.entries)[0];
+  const s = curSubject(); if (!s || !qEntries(s).length) return;
+  const first = slotsOf(qEntries(s))[0];
   const ok = await dialog({ title: 'Убрать первого?', text: first.members.map(m => m.name).join(' и ') + ' — ответил(а).', okText: 'Убрать' });
-  if (ok) act('admin_next', { p_subject_id: s.id });
+  if (ok) act('admin_next', { p_subject_id: s.id, p_queue: curQ });
 });
 $('a-add').addEventListener('click', async () => {
   const s = curSubject(); if (!s) return;
   const name = await dialog({ title: 'Добавить человека', text: 'Имя, как оно будет в списке', input: true, okText: 'Добавить' });
   if (!name) return;
-  const n = slotsOf(s.entries).length;
-  const args = { p_subject_id: s.id, p_name: name };
+  const n = slotsOf(qEntries(s)).length;
+  const args = { p_subject_id: s.id, p_name: name, p_queue: curQ };
   if (n > 0) {
     const pos = await dialog({
       title: 'На какое место?', text: `Номер от 1 до ${n + 1}. Остальные сдвинутся вниз. Пусто — в конец.`,
@@ -561,9 +592,9 @@ $('a-add').addEventListener('click', async () => {
   act('admin_add_person', args);
 });
 $('a-clear').addEventListener('click', async () => {
-  const s = curSubject(); if (!s || !s.entries.length) return;
-  const ok = await dialog({ title: 'Очистить очередь?', text: s.name + ': будут удалены все записи.', okText: 'Очистить', danger: true });
-  if (ok) act('admin_clear', { p_subject_id: s.id }, 'Очередь очищена');
+  const s = curSubject(); if (!s || !qEntries(s).length) return;
+  const ok = await dialog({ title: 'Очистить очередь?', text: s.name + ' · ' + QUEUE_NAMES[curQ] + ': будут удалены все записи.', okText: 'Очистить', danger: true });
+  if (ok) act('admin_clear', { p_subject_id: s.id, p_queue: curQ }, 'Очередь очищена');
 });
 $('a-subj-add').addEventListener('click', async () => {
   const name = await dialog({ title: 'Новый предмет', input: true, okText: 'Добавить' });

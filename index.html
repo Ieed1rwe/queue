@@ -200,9 +200,12 @@ const SUPABASE_URL = 'https://bsfbkvvvqqlthcvxlytf.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_zjScZCOtkovsmsUSlFeU4A_KZQ1nH_I';   // публичный ключ (anon / publishable), НЕ secret / service_role!
 /* =========================================================================== */
 
+// Соединение с базой устанавливаем заранее: первый запрос уходит быстрее
+{ const l = document.createElement('link'); l.rel = 'preconnect'; l.href = SUPABASE_URL; document.head.appendChild(l); }
+
 const tg = window.Telegram && window.Telegram.WebApp;
 const INIT = tg ? (tg.initData || '') : '';
-const POLL_MS = 5000;
+const POLL_MS = 3000;
 
 let state = null;      // последнее состояние с сервера
 let sig = '';          // подпись состояния, чтобы не перерисовывать зря
@@ -492,15 +495,34 @@ function render() {
 }
 
 /* ---------- Данные ---------- */
+// Своё состояние храним на устройстве: при открытии список виден сразу, не дожидаясь сети
+const CACHE_KEY = 'queue-state-v1';
+let myId = null;
+try { myId = JSON.parse(new URLSearchParams(INIT).get('user')).id; } catch (e) {}
+function cacheState(st) { try { localStorage.setItem(CACHE_KEY, JSON.stringify(st)); } catch (e) {} }
+function loadCache() {
+  try {
+    const c = JSON.parse(localStorage.getItem(CACHE_KEY));
+    if (c && c.hash && myId && c.tg_id === myId) return c;   // только своё, не чужого аккаунта
+  } catch (e) {}
+  return null;
+}
+
+// Принять состояние с сервера. Возвращает true, если оно новое.
+function applyState(s) {
+  if (!s || s.same) return false;
+  const key = s.hash || JSON.stringify(s);   // запасной вариант для базы без хэша
+  if (key === sig) return false;
+  sig = key; state = s; cacheState(s); prepare(state); render();
+  return true;
+}
+
 async function refresh(silent) {
   try {
     // Передаём хэш уже полученного состояния: если ничего не изменилось, сервер отвечает коротко
     const s = await rpc('app_state', state && state.hash && sig ? { p_hash: state.hash } : {});
     $('net').hidden = true;
-    if (s.same) return;
-    const key = s.hash || JSON.stringify(s);   // запасной вариант для базы без хэша
-    if (key === sig) return;
-    sig = key; state = s; prepare(state); render();
+    applyState(s);
   } catch (e) { handleErr(e, silent); }
 }
 
@@ -508,9 +530,11 @@ async function act(name, args, okMsg) {
   if (busy) return false;
   busy = true; document.body.classList.add('busy');
   try {
-    await rpc(name, args);
+    const res = await rpc(name, args);
     haptic('success');
-    await refresh();
+    // Функции базы возвращают свежее состояние: второй запрос не нужен
+    if (res && typeof res === 'object' && 'is_member' in res) applyState(res);
+    else await refresh();
     if (okMsg) toast(okMsg);
     return true;
   } catch (e) { haptic('error'); handleErr(e); return false; }
@@ -686,10 +710,10 @@ $('file-input').addEventListener('change', async () => {
       let msg = ''; try { const j = await r.json(); msg = j.message || j.error || ''; } catch (err) {}
       const er = new Error('upload_failed'); er.detail = msg || ('HTTP ' + r.status); throw er;
     }
-    await rpc('admin_file_register', { p_path: path, p_name: file.name, p_size: file.size });
+    const res = await rpc('admin_file_register', { p_path: path, p_name: file.name, p_size: file.size });
     haptic('success');
-    sig = '';
-    await refresh();
+    if (res && typeof res === 'object' && 'is_member' in res) applyState(res);
+    else { sig = ''; await refresh(); }
     toast('Файл прикреплён');
   } catch (e) {
     haptic('error');
@@ -724,6 +748,8 @@ if (SUPABASE_URL.includes('ВАШ') || SUPABASE_KEY.includes('ВАШ')) {
 } else if (!INIT) {
   showMsg('Откройте через Telegram', 'Это мини-приложение работает только внутри Telegram: откройте его через бота.');
 } else {
+  const cached = loadCache();
+  if (cached) { sig = cached.hash; state = cached; prepare(state); render(); }
   refresh();
   setInterval(() => { if (!document.hidden && !busy) refresh(true); }, POLL_MS);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(true); });

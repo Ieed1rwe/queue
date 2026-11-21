@@ -165,7 +165,6 @@
       <div class="admin-grid">
         <button id="a-toggle1" class="btn ghost"></button>
         <button id="a-toggle2" class="btn ghost"></button>
-        <p id="a-diag" class="sub" style="margin:0;font-size:12px"></p>
         <button id="a-next" class="btn ghost">✓ Первый ответил — убрать из очереди</button>
         <button id="a-add" class="btn ghost">＋ Добавить человека вручную</button>
         <button id="a-clear" class="btn ghost danger">Очистить очередь предмета</button>
@@ -215,6 +214,7 @@ let busy = false;
 try { current = Number(sessionStorage.getItem('subj')) || null; curQ = Number(sessionStorage.getItem('q')) === 2 ? 2 : 1; } catch (e) {}
 
 const $ = id => document.getElementById(id);
+const store = (k, v) => { try { sessionStorage.setItem(k, v); } catch (e) {} };
 const esc = s => String(s).replace(/[&<>"']/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -345,7 +345,6 @@ function curSubject() {
 }
 
 function qOpen(s, q) { return q === 1 ? s.is_open !== false : s.is_open2 === true; }
-function qEntries(s, q) { return s.entries.filter(e => (e.queue || 1) === (q || curQ)); }
 
 const MAX_SLOT = 2;   // сколько человек может выступать вместе (должно совпадать с базой)
 
@@ -355,6 +354,22 @@ function slotsOf(entries) {
   entries.forEach(e => { if (e.partner_of != null) (by[e.partner_of] = by[e.partner_of] || []).push(e); });
   return entries.filter(e => e.partner_of == null).map(l => ({ lead: l, members: [l, ...(by[l.id] || [])] }));
 }
+
+// Один раз на каждое новое состояние: записи по очередям и места внутри них
+function prepare(st) {
+  (st.subjects || []).forEach(s => {
+    s.qs = {};
+    [1, 2].forEach(q => {
+      const entries = s.entries.filter(e => (e.queue || 1) === q);
+      s.qs[q] = { entries, slots: slotsOf(entries) };
+    });
+    s.places = s.qs[1].slots.length + s.qs[2].slots.length;
+  });
+}
+const qEntries = (s, q) => s.qs[q || curQ].entries;
+
+const ADMIN_BTNS = ['a-next', 'a-add', 'a-clear', 'a-toggle1', 'a-toggle2'].map($);
+const setAdminHidden = h => ADMIN_BTNS.forEach(b => { b.hidden = h; });
 
 function render() {
   if (!state) return;
@@ -382,7 +397,7 @@ function render() {
 
   // вкладки
   $('tabs').innerHTML = subjects.map(x =>
-    `<button class="tab${s && x.id === s.id ? ' on' : ''}" data-id="${x.id}">${esc(x.name)}<small>${slotsOf(x.entries).length}</small></button>`
+    `<button class="tab${s && x.id === s.id ? ' on' : ''}" data-id="${x.id}">${esc(x.name)}<small>${x.places}</small></button>`
   ).join('');
 
   if (!s) {
@@ -393,13 +408,12 @@ function render() {
     $('empty').hidden = true;
     $('btn-main').hidden = true;
     $('files-card').hidden = true;
-    $('a-next').hidden = $('a-add').hidden = $('a-clear').hidden = $('a-toggle1').hidden = $('a-toggle2').hidden = true;
+    setAdminHidden(true);
   } else {
     $('qtabs').innerHTML = [1, 2].map(q =>
-      `<button class="tab${q === curQ ? ' on' : ''}" data-q="${q}">${qOpen(s, q) ? '' : '🔒 '}${QUEUE_NAMES[q]}<small>${slotsOf(qEntries(s, q)).length}</small></button>`
+      `<button class="tab${q === curQ ? ' on' : ''}" data-q="${q}">${qOpen(s, q) ? '' : '🔒 '}${QUEUE_NAMES[q]}<small>${s.qs[q].slots.length}</small></button>`
     ).join('');
-    const entries = qEntries(s);
-    const slots = slotsOf(entries);
+    const { entries, slots } = s.qs[curQ];
     const myIdx = slots.findIndex(sl => sl.members.some(e => e.tg_id === state.tg_id));
     const mySlot = myIdx >= 0 ? slots[myIdx] : null;
     const iHavePartner = !!mySlot && mySlot.lead.tg_id === state.tg_id && mySlot.members.length > 1;
@@ -451,10 +465,7 @@ function render() {
     } else { b.textContent = 'Записаться в очередь'; b.className = 'btn'; }
     b.disabled = !mySlot && !isOpen;
 
-    $('a-next').hidden = $('a-add').hidden = $('a-clear').hidden = $('a-toggle1').hidden = $('a-toggle2').hidden = false;
-    const fl = v => v === true ? 'открыта' : v === false ? 'закрыта' : 'НЕТ ДАННЫХ (база не обновлена)';
-    $('a-diag').textContent = 'Из базы: «Старые» — ' + fl(s.is_open) + ', «Новые» — ' + fl(s.is_open2) +
-      '; записей в «Новых»: ' + s.entries.filter(e => e.queue === 2).length;
+    setAdminHidden(false);
     [1, 2].forEach(q => {
       $('a-toggle' + q).textContent = (qOpen(s, q) ? '🔒 Закрыть запись: ' : '🔓 Открыть запись: ') + QUEUE_NAMES[q];
     });
@@ -483,16 +494,13 @@ function render() {
 /* ---------- Данные ---------- */
 async function refresh(silent) {
   try {
-    const s = await rpc('app_state');
+    // Передаём хэш уже полученного состояния: если ничего не изменилось, сервер отвечает коротко
+    const s = await rpc('app_state', state && state.hash && sig ? { p_hash: state.hash } : {});
     $('net').hidden = true;
-    const ns = JSON.stringify(s);
-    if (ns === sig) return;
-    // база не обновлена до версии с двумя очередями — предупреждаем старосту
-    if (s.is_admin && s.subjects && s.subjects.length && !('is_open2' in s.subjects[0]) && !window.__warnedV6) {
-      window.__warnedV6 = true;
-      toast('База данных на старой версии: выполните update_v6.sql в Supabase целиком.', 8000);
-    }
-    sig = ns; state = s; render();
+    if (s.same) return;
+    const key = s.hash || JSON.stringify(s);   // запасной вариант для базы без хэша
+    if (key === sig) return;
+    sig = key; state = s; prepare(state); render();
   } catch (e) { handleErr(e, silent); }
 }
 
@@ -513,14 +521,14 @@ async function act(name, args, okMsg) {
 $('tabs').addEventListener('click', e => {
   const t = e.target.closest('.tab'); if (!t) return;
   current = Number(t.dataset.id);
-  try { sessionStorage.setItem('subj', current); } catch (err) {}
+  store('subj', current);
   render();
 });
 
 $('qtabs').addEventListener('click', e => {
   const t = e.target.closest('.tab'); if (!t) return;
   curQ = Number(t.dataset.q) === 2 ? 2 : 1;
-  try { sessionStorage.setItem('q', curQ); } catch (err) {}
+  store('q', curQ);
   render();
 });
 
@@ -580,11 +588,11 @@ $('list').addEventListener('click', async e => {
   // сообщаем то, что реально записано в базе, а не то, что мы хотели
   const s2 = curSubject();
   if (s2 && qOpen(s2, q) === open) toast((open ? 'Открыта запись: ' : 'Закрыта запись: ') + QUEUE_NAMES[q]);
-  else toast('Не получилось: база не приняла изменение. Выполните update_v6.sql целиком.', 6000);
+  else toast('Не получилось: база не приняла изменение. Выполните setup.sql в Supabase целиком.', 6000);
 }));
 $('a-next').addEventListener('click', async () => {
   const s = curSubject(); if (!s || !qEntries(s).length) return;
-  const first = slotsOf(qEntries(s))[0];
+  const first = s.qs[curQ].slots[0];
   const ok = await dialog({ title: 'Убрать первого?', text: first.members.map(m => m.name).join(' и ') + ' — ответил(а).', okText: 'Убрать' });
   if (ok) act('admin_next', { p_subject_id: s.id, p_queue: curQ });
 });
@@ -592,7 +600,7 @@ $('a-add').addEventListener('click', async () => {
   const s = curSubject(); if (!s) return;
   const name = await dialog({ title: 'Добавить человека', text: 'Имя, как оно будет в списке', input: true, okText: 'Добавить' });
   if (!name) return;
-  const n = slotsOf(qEntries(s)).length;
+  const n = s.qs[curQ].slots.length;
   const args = { p_subject_id: s.id, p_name: name, p_queue: curQ };
   if (n > 0) {
     const pos = await dialog({

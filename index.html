@@ -172,6 +172,16 @@
       <h3>Предметы</h3>
       <div id="subj-list"></div>
       <button id="a-subj-add" class="btn ghost" style="margin-top:8px">＋ Добавить предмет</button>
+
+      <div id="notify-box" hidden>
+        <h3>Уведомления в группу</h3>
+        <div class="admin-grid" style="margin-top:6px">
+          <button id="n-files" class="btn ghost"></button>
+          <button id="n-first" class="btn ghost"></button>
+        </div>
+        <p class="foot" style="text-align:left">Нажмите на кнопку, чтобы включить или выключить.</p>
+        <p id="notify-note" class="foot" style="text-align:left;color:var(--danger)" hidden>Группа ещё не подключена к боту, поэтому уведомления пока не отправляются.</p>
+      </div>
     </details>
 
     <p class="foot">Ваш Telegram ID: <span class="id" id="my-id"></span></p>
@@ -256,7 +266,8 @@ const ERR_TEXT = {
   has_partner: 'У вас уже есть напарник. Сначала выйдите из очереди.',
   no_entry: 'Эта запись уже исчезла. Список обновлён.',
   not_lead: 'Присоединиться можно только к основному месту.',
-  queue_closed: 'Очередь закрыта. Староста откроет её позже.'
+  queue_closed: 'Очередь закрыта. Староста откроет её позже.',
+  bad_kind: 'Такого вида уведомлений нет.'
 };
 const FATAL = ['bad_auth', 'expired'];
 
@@ -486,6 +497,15 @@ function render() {
     $('files-admin').hidden = !adm;
   }
 
+  // уведомления в группу (видны старосте; нужна обновлённая база)
+  const nf = state.notify;
+  $('notify-box').hidden = !(state.is_admin && nf);
+  if (nf) {
+    $('n-files').textContent = nf.files ? '🔔 Файлы: уведомления включены' : '🔕 Файлы: уведомления выключены';
+    $('n-first').textContent = nf.first ? '🔔 Первое место: уведомления включены' : '🔕 Первое место: уведомления выключены';
+    $('notify-note').hidden = nf.configured !== false;
+  }
+
   // управление предметами
   $('subj-list').innerHTML = subjects.map(x =>
     `<div class="subj"><span>${esc(x.name)}</span>
@@ -616,6 +636,15 @@ $('list').addEventListener('click', async e => {
   if (s2 && qOpen(s2, q) === open) toast((open ? 'Открыта запись: ' : 'Закрыта запись: ') + QUEUE_NAMES[q]);
   else toast('Не получилось: база не приняла изменение. Выполните setup.sql в Supabase целиком.', 6000);
 }));
+[['files', 'о файлах'], ['first', 'о первом месте']].forEach(([k, label]) =>
+  $('n-' + k).addEventListener('click', async () => {
+    const on = !(state.notify && state.notify[k]);
+    const ok = await act('admin_set_notify', { p_kind: k, p_enabled: on }, null);
+    if (!ok) return;
+    // сообщаем то, что реально записано в базе
+    if (state.notify && state.notify[k] === on) toast('Уведомления ' + label + (on ? ': включены' : ': выключены'));
+    else toast('Не получилось: база не приняла изменение. Выполните setup.sql в Supabase целиком.', 6000);
+  }));
 $('a-next').addEventListener('click', async () => {
   const s = curSubject(); if (!s || !qEntries(s).length) return;
   const first = s.qs[curQ].slots[0];

@@ -205,7 +205,7 @@ const SUPABASE_KEY = 'sb_publishable_zjScZCOtkovsmsUSlFeU4A_KZQ1nH_I';   // пу
 
 const tg = window.Telegram && window.Telegram.WebApp;
 const INIT = tg ? (tg.initData || '') : '';
-const POLL_MS = 3000;
+let stateSeq = 0;   // номер последнего запроса состояния: устаревшие ответы отбрасываем
 
 let state = null;      // последнее состояние с сервера
 let sig = '';          // подпись состояния, чтобы не перерисовывать зря
@@ -520,7 +520,9 @@ function applyState(s) {
 async function refresh(silent) {
   try {
     // Передаём хэш уже полученного состояния: если ничего не изменилось, сервер отвечает коротко
+    const mine = ++stateSeq;
     const s = await rpc('app_state', state && state.hash && sig ? { p_hash: state.hash } : {});
+    if (mine !== stateSeq) return;   // пока ждали ответ, пришло более свежее состояние
     $('net').hidden = true;
     applyState(s);
   } catch (e) { handleErr(e, silent); }
@@ -533,7 +535,7 @@ async function act(name, args, okMsg) {
     const res = await rpc(name, args);
     haptic('success');
     // Функции базы возвращают свежее состояние: второй запрос не нужен
-    if (res && typeof res === 'object' && 'is_member' in res) applyState(res);
+    if (res && typeof res === 'object' && 'is_member' in res) { stateSeq++; applyState(res); }
     else await refresh();
     if (okMsg) toast(okMsg);
     return true;
@@ -712,7 +714,7 @@ $('file-input').addEventListener('change', async () => {
     }
     const res = await rpc('admin_file_register', { p_path: path, p_name: file.name, p_size: file.size });
     haptic('success');
-    if (res && typeof res === 'object' && 'is_member' in res) applyState(res);
+    if (res && typeof res === 'object' && 'is_member' in res) { stateSeq++; applyState(res); }
     else { sig = ''; await refresh(); }
     toast('Файл прикреплён');
   } catch (e) {
@@ -742,6 +744,85 @@ $('rename').addEventListener('click', async () => {
 });
 $('code').addEventListener('keydown', e => { if (e.key === 'Enter') $('btn-join').click(); });
 
+/* ---------- Мгновенные обновления (Supabase Realtime) ----------
+   База шлёт в публичный канал пустое оповещение «что-то изменилось», приложение
+   сразу запрашивает свежий список обычным запросом. Данные по каналу не идут.
+   Если канал недоступен, всё продолжает работать на частом опросе. */
+const RT_TOPIC = 'realtime:queue-updates';
+const RT = { ws: null, up: false, hb: null, retry: 0, timer: null, ping: null };
+const POLL_FAST = 3000;    // опрос, пока мгновенный канал не работает
+const POLL_SLOW = 20000;   // страховочный опрос, пока он работает
+let pollTimer = null, pollAt = 0;
+
+// Запланировать ближайший опрос. Уже стоящий в плане опрос не откладываем:
+// иначе частые попытки переподключения могли бы бесконечно сдвигать запасной опрос.
+function schedulePoll() {
+  const delay = RT.up ? POLL_SLOW : POLL_FAST;
+  const due = Date.now() + delay;
+  if (pollTimer && pollAt <= due) return;
+  clearTimeout(pollTimer);
+  pollAt = due;
+  pollTimer = setTimeout(async () => {
+    pollTimer = null;
+    if (!document.hidden && !busy) await refresh(true);
+    schedulePoll();
+  }, delay);
+}
+
+// Оповещения приходят пачкой: склеиваем их, затем проверяем ещё раз чуть позже
+// (база шлёт не чаще раза в 0,5 с, повторная проверка подберёт изменения внутри этого окна)
+function onPing() {
+  if (RT.ping) return;
+  RT.ping = setTimeout(async () => {
+    RT.ping = null;
+    await refresh(true);
+    setTimeout(() => refresh(true), 700);
+  }, 80);
+}
+
+function rtSend(m) { if (RT.ws && RT.ws.readyState === 1) RT.ws.send(JSON.stringify(m)); }
+
+function rtRetry() {
+  clearTimeout(RT.timer);
+  RT.timer = setTimeout(rtConnect, Math.min(30000, 1000 * 2 ** Math.min(RT.retry++, 5)));
+}
+
+function rtConnect() {
+  if (typeof WebSocket === 'undefined' || (RT.ws && RT.ws.readyState <= 1)) return;
+  let ws;
+  try {
+    ws = new WebSocket(SUPABASE_URL.replace(/^http/, 'ws') + '/realtime/v1/websocket?apikey=' +
+                       encodeURIComponent(SUPABASE_KEY) + '&vsn=1.0.0');
+  } catch (e) { rtRetry(); return; }
+  RT.ws = ws;
+  ws.onopen = () => {
+    rtSend({ topic: RT_TOPIC, event: 'phx_join', ref: '1', join_ref: '1',
+      payload: { config: { broadcast: { ack: false, self: false }, presence: { enabled: false }, private: false } } });
+    clearInterval(RT.hb);
+    let n = 1;
+    RT.hb = setInterval(() => rtSend({ topic: 'phoenix', event: 'heartbeat', payload: {}, ref: String(++n) }), 25000);
+  };
+  ws.onmessage = ev => {
+    let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+    if (m.topic !== RT_TOPIC) return;
+    if (m.event === 'phx_reply' && m.ref === '1') {
+      const ok = !!(m.payload && m.payload.status === 'ok');
+      RT.up = ok;
+      if (ok) { RT.retry = 0; refresh(true); schedulePoll(); }   // подписались: сверяемся и замедляем опрос
+      else { try { ws.close(); } catch (e) {} }
+    } else if (m.event === 'broadcast') {
+      onPing();
+    } else if (m.event === 'phx_error' || m.event === 'phx_close') {
+      RT.up = false; schedulePoll();
+    }
+  };
+  ws.onclose = () => {
+    clearInterval(RT.hb);
+    if (RT.ws === ws) { RT.ws = null; RT.up = false; schedulePoll(); rtRetry(); }
+  };
+  ws.onerror = () => { try { ws.close(); } catch (e) {} };
+}
+
 /* ---------- Старт ---------- */
 if (SUPABASE_URL.includes('ВАШ') || SUPABASE_KEY.includes('ВАШ')) {
   showMsg('Приложение не настроено', 'Откройте index.html и впишите SUPABASE_URL и SUPABASE_KEY в блоке «НАСТРОЙКИ».');
@@ -751,8 +832,13 @@ if (SUPABASE_URL.includes('ВАШ') || SUPABASE_KEY.includes('ВАШ')) {
   const cached = loadCache();
   if (cached) { sig = cached.hash; state = cached; prepare(state); render(); }
   refresh();
-  setInterval(() => { if (!document.hidden && !busy) refresh(true); }, POLL_MS);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(true); });
+  schedulePoll();
+  rtConnect();
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    refresh(true);
+    if (!RT.up) { RT.retry = 0; rtConnect(); }
+  });
 }
 })();
 </script>
